@@ -66,6 +66,7 @@ namespace SkypeBot.plugins {
                 log.Info("Sending request to YouTube...");
 
                 VideosResource.ListRequest request = youtubeService.Videos.List("snippet,contentDetails,statistics");
+                request.Fields = "items(id,snippet(title,channelTitle),contentDetails/duration,statistics(likeCount,dislikeCount))";
                 request.Id = youtubeId;
 
                 VideoListResponse response = request.Execute();
@@ -84,6 +85,7 @@ namespace SkypeBot.plugins {
                 String query = output.Groups[1].Value;
 
                 SearchResource.ListRequest request = youtubeService.Search.List("snippet");
+                request.Fields = "items(id)";
                 request.Q = query;
                 request.Type = "video";
                 request.SafeSearch = SearchResource.ListRequest.SafeSearchEnum.None;
@@ -127,6 +129,7 @@ namespace SkypeBot.plugins {
                 try {
                     log.Debug("Generating a random video...");
                     VideosResource.ListRequest request = youtubeService.Videos.List("snippet");
+                    request.Fields = "items(id,snippet/title)";
                     request.Chart = VideosResource.ListRequest.ChartEnum.MostPopular;
                     request.MaxResults = 40;
 
@@ -140,8 +143,9 @@ namespace SkypeBot.plugins {
                     log.Debug("Picked \"" + first.Snippet.Title + "\" as my starting point.");
                     for (int i = 0; i < PluginSettings.Default.YoutubeIterations; i++) {
                         SearchResource.ListRequest relatedRequest = youtubeService.Search.List("snippet");
-                        relatedRequest.RelatedToVideoId = id;
+                        relatedRequest.Fields = "items(id,snippet/title)";
                         relatedRequest.Type = "video";
+                        relatedRequest.RelatedToVideoId = id;
                         relatedRequest.SafeSearch = SearchResource.ListRequest.SafeSearchEnum.None;
                         relatedRequest.MaxResults = 20;
 
