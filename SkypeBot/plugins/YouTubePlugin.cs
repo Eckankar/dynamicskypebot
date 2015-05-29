@@ -8,10 +8,9 @@ using System.IO;
 using SKYPE4COMLib;
 using System.Collections;
 using System.Xml;
-using System.Xml.XPath;
-using Google.GData.YouTube;
-using Google.YouTube;
-using Google.GData.Client;
+using Google.Apis.YouTube.v3;
+using Google.Apis.YouTube.v3.Data;
+using Google.Apis.Services;
 using SkypeBot.plugins.config.youtube;
 using System.Threading;
 using log4net;
@@ -21,7 +20,7 @@ namespace SkypeBot.plugins {
     public class YouTubePlugin : Plugin {
         private static readonly ILog log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
         private Random random;
-        private YouTubeRequest ytr;
+        private YouTubeService youtubeService;
         private Queue<String> randomCache;
 
         public String name() { return "YouTube Plugin"; }
@@ -40,11 +39,11 @@ namespace SkypeBot.plugins {
 
         public YouTubePlugin() {
             random = new Random();
-            ytr = new YouTubeRequest(
-                    new YouTubeRequestSettings("Dynamic Skype Bot",
-                                               "ytapi-SebastianPaaske-DynamicSkypeBot-b3hp906d-0",
-                                               "AI39si59QPSboGTxgVnE0OD5nO49p1ok9KAoM0BuT9KkyL-VNzkrUA2F1O46FqArUrppYc5AGwrE-xQhaefb_cp4mgHuw36F9Q")
-                    );
+            youtubeService = new YouTubeService(new BaseClientService.Initializer()
+            {
+                ApiKey = "REPLACE_ME",
+                ApplicationName = "Dynamic Skype Bot"
+            });
             randomCache = new Queue<string>();
         }
 
@@ -66,19 +65,17 @@ namespace SkypeBot.plugins {
                 String youtubeId = output.Groups[1].Value;
                 log.Info("Sending request to YouTube...");
 
-                YouTubeQuery ytq = new YouTubeQuery("http://gdata.youtube.com/feeds/api/videos/" + youtubeId);
+                VideosResource.ListRequest request = youtubeService.Videos.List("snippet,contentDetails,statistics");
+                request.Id = youtubeId;
 
-                Feed<Video> feed = ytr.Get<Video>(ytq);
-                Video vid = feed.Entries.ElementAt<Video>(0);
-                String title = vid.Title;
-                String user = vid.Author;
-                String rating = vid.RatingAverage.ToString();
+                VideoListResponse response = request.Execute();
+                Video vid = response.Items[0];
+                String title = vid.Snippet.Title;
+                String user = vid.Snippet.ChannelTitle;
+                String rating = vid.Statistics.LikeCount + "👍 " + vid.Statistics.DislikeCount + "👎";
+                TimeSpan duration = XmlConvert.ToTimeSpan(vid.ContentDetails.Duration);
 
-                int seconds = Int32.Parse(vid.Media.Duration.Seconds) % 60;
-                int minutes = Int32.Parse(vid.Media.Duration.Seconds) / 60;
-                String duration = String.Format(@"{0}:{1:00}", minutes, seconds);
-
-                message.Chat.SendMessage(String.Format(@"YouTube: ""{0}"" (uploaded by: {1}) (avg rating: {2:F2}) (duration: {3})", title, user, rating, duration));
+                message.Chat.SendMessage(String.Format(@"YouTube: ""{0}"" (uploaded by: {1}) (duration: {2}) (rating: {3})", title, user, duration, rating));
                 return;
             }
             
@@ -86,18 +83,19 @@ namespace SkypeBot.plugins {
             if (output.Success) {
                 String query = output.Groups[1].Value;
 
-                YouTubeQuery ytq = new YouTubeQuery(YouTubeQuery.DefaultVideoUri);
-                ytq.Query = query;
-                ytq.SafeSearch = YouTubeQuery.SafeSearchValues.None;
-                ytq.NumberToRetrieve = 10;
+                SearchResource.ListRequest request = youtubeService.Search.List("snippet");
+                request.Q = query;
+                request.Type = "video";
+                request.SafeSearch = SearchResource.ListRequest.SafeSearchEnum.None;
+                request.MaxResults = 10;
 
-                Feed<Video> feed = ytr.Get<Video>(ytq);
-                int count = feed.Entries.Count<Video>();
+                SearchListResponse response = request.Execute();
+                int count = response.Items.Count;
 
                 string url;
                 if (count > 0) {
-                    Video vid = feed.Entries.ElementAt<Video>(random.Next(count));
-                    url = vid.WatchPage.ToString();
+                    SearchResult result = response.Items[random.Next(count)];
+                    url = "https://youtu.be/" + result.Id.VideoId;
                 } else {
                     url = "No matches found.";
                 }
@@ -128,26 +126,34 @@ namespace SkypeBot.plugins {
             while (randomCache.Count < PluginSettings.Default.YoutubeCacheSize) {
                 try {
                     log.Debug("Generating a random video...");
-                    YouTubeQuery ytq = new YouTubeQuery(YouTubeQuery.MostPopular);
-                    ytq.SafeSearch = YouTubeQuery.SafeSearchValues.None;
-                    ytq.NumberToRetrieve = 40;
+                    VideosResource.ListRequest request = youtubeService.Videos.List("snippet");
+                    request.Chart = VideosResource.ListRequest.ChartEnum.MostPopular;
+                    request.MaxResults = 40;
 
                     log.Debug("Fetching list of most popular videos...");
+                    
+                    VideoListResponse response = request.Execute();
+                    int count = response.Items.Count;
 
-                    Feed<Video> feed = ytr.Get<Video>(ytq);
-                    int count = feed.Entries.Count<Video>();
-
-                    Video vid = feed.Entries.ElementAt<Video>(random.Next(count));
-                    log.Debug("Picked \"" + vid.Title + "\" as my starting point.");
+                    Video first = response.Items[random.Next(count)];
+                    String id = first.Id;
+                    log.Debug("Picked \"" + first.Snippet.Title + "\" as my starting point.");
                     for (int i = 0; i < PluginSettings.Default.YoutubeIterations; i++) {
-                        Feed<Video> related = ytr.GetRelatedVideos(vid);
-                        count = related.Entries.Count<Video>();
-                        vid = related.Entries.ElementAt<Video>(random.Next(count));
-                        log.Debug("Next link: " + vid.Title);
+                        SearchResource.ListRequest relatedRequest = youtubeService.Search.List("snippet");
+                        relatedRequest.RelatedToVideoId = id;
+                        relatedRequest.Type = "video";
+                        relatedRequest.SafeSearch = SearchResource.ListRequest.SafeSearchEnum.None;
+                        relatedRequest.MaxResults = 20;
+
+                        SearchListResponse relatedResponse = relatedRequest.Execute();
+                        count = relatedResponse.Items.Count;
+                        SearchResult result = relatedResponse.Items[random.Next(count)];
+                        id = result.Id.VideoId;
+                        log.Debug("Next link: " + result.Snippet.Title);
                     }
 
                     log.Debug("Found my random video!");
-                    String url = vid.WatchPage.ToString();
+                    String url = "https://youtu.be/" + id;
 
                     if (onlyOne) {
                         return url;
